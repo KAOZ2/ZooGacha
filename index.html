@@ -6,6 +6,7 @@
 <title>ZooGacha — Seu Zoológico Virtual</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:ital,wght@0,400;0,600;0,700;1,500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{
     --sand:#F5EEDA; --sand-deep:#EADFC0;
@@ -454,6 +455,11 @@
 
 
 <script>
+/* ---------- Supabase (ranking e trocas entre jogadores) ---------- */
+const SUPABASE_URL = 'https://qjratiumbctbiwasxidp.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_jjqMvu-eN_CZaRaKTBRGAA_uLnxPO28';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
 /* =========================================================
    DATA
 ========================================================= */
@@ -824,15 +830,15 @@ function migrateAnimalMap(map){
 async function saveState(){
   state.lastActive = Date.now();
   try{
-    await window.storage.set(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     document.getElementById('saveNote').textContent = 'Progresso salvo automaticamente.';
   }catch(e){ document.getElementById('saveNote').textContent = 'Não foi possível salvar agora.'; }
 }
 async function loadState(){
   try{
-    const res = await window.storage.get(STORAGE_KEY);
-    if(res && res.value){
-      const loaded = JSON.parse(res.value);
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(raw){
+      const loaded = JSON.parse(raw);
       state = Object.assign(state, loaded);
       state.items = Object.assign({permanent:{}, activeBoosts:{energyExpiry:0, gachaLuckUses:0}}, loaded.items||{});
       state.items.activeBoosts = Object.assign({energyExpiry:0, gachaLuckUses:0}, (loaded.items||{}).activeBoosts||{});
@@ -1386,11 +1392,11 @@ async function setNickname(nickRaw){
 async function publishProfile(){
   if(!state.playerId) return;
   try{
-    await window.storage.set('player:'+state.playerId, JSON.stringify({
-      playerId: state.playerId, nick: state.nick,
+    await sb.from('players').upsert({
+      player_id: state.playerId, nick: state.nick,
       score: Math.floor(state.totalCollected), species: ownedCount(),
-      rebirths: state.rebirths, shiny: totalShinyCount(), updatedAt: Date.now()
-    }), true);
+      rebirths: state.rebirths, shiny: totalShinyCount(), updated_at: new Date().toISOString()
+    });
   }catch(e){}
 }
 async function renderRanking(){
@@ -1398,14 +1404,11 @@ async function renderRanking(){
   wrap.innerHTML = '<p class="note">Carregando...</p>';
   try{
     await publishProfile();
-    const idx = await window.storage.list('player:', true);
-    const keys = (idx && idx.keys) ? idx.keys.slice(0,80) : [];
-    const entries = [];
-    for(const k of keys){ try{ const r = await window.storage.get(k, true); if(r && r.value) entries.push(JSON.parse(r.value)); }catch(e){} }
-    entries.sort((a,b)=>b.score-a.score);
-    const top = entries.slice(0,25);
+    const { data, error } = await sb.from('players').select('*').order('score', {ascending:false}).limit(25);
+    if(error) throw error;
+    const top = data || [];
     wrap.innerHTML = top.length ? top.map((e,i)=>{
-      const mine = e.playerId===state.playerId;
+      const mine = e.player_id===state.playerId;
       return '<div class="lb-row"'+(mine?' style="color:var(--sunset-deep);"':'')+'><span>#'+(i+1)+' '+e.nick+(mine?' (você)':'')+'</span><span>🪙'+Math.floor(e.score)+' · 🐾'+e.species+' · ✨'+e.shiny+' · 🔄'+e.rebirths+'</span></div>';
     }).join('') : '<p class="note">Nenhum jogador publicado ainda. Seja o primeiro!</p>';
   }catch(e){ wrap.innerHTML = '<p class="note">Não foi possível carregar o ranking agora.</p>'; }
@@ -1445,16 +1448,14 @@ async function renderMarket(){
   const wrap = document.getElementById('marketList');
   wrap.innerHTML = '<p class="note">Carregando...</p>';
   try{
-    const idx = await window.storage.list('trade:', true);
-    const keys = (idx && idx.keys) ? idx.keys.slice(0,80) : [];
-    const offers = [];
-    for(const k of keys){ try{ const r = await window.storage.get(k, true); if(r && r.value) offers.push(JSON.parse(r.value)); }catch(e){} }
-    const open = offers.filter(o=>o.status==='open' && o.fromPlayerId!==state.playerId);
+    const { data, error } = await sb.from('trade_offers').select('*').eq('status','open').neq('from_player_id', state.playerId).limit(80);
+    if(error) throw error;
+    const open = data || [];
     wrap.innerHTML = open.length ? open.map(o=>{
-      const sp = speciesById(o.offerSpeciesId);
-      const wantText = o.wantType==='coins' ? '🪙 '+o.wantCoins+' moedas' : (speciesById(o.wantSpeciesId).emoji+' '+speciesById(o.wantSpeciesId).name);
-      const canAfford = o.wantType==='coins' ? state.coins>=o.wantCoins : (getStars(state.animals,o.wantSpeciesId)[0]>=1);
-      return '<div class="shop-item"><div class="info"><b>'+o.fromNick+' oferece '+sp.emoji+' '+sp.name+'</b><span>Quer: '+wantText+'</span></div>'+
+      const sp = speciesById(o.offer_species_id);
+      const wantText = o.want_type==='coins' ? '🪙 '+o.want_coins+' moedas' : (speciesById(o.want_species_id).emoji+' '+speciesById(o.want_species_id).name);
+      const canAfford = o.want_type==='coins' ? state.coins>=o.want_coins : (getStars(state.animals,o.want_species_id)[0]>=1);
+      return '<div class="shop-item"><div class="info"><b>'+o.from_nick+' oferece '+sp.emoji+' '+sp.name+'</b><span>Quer: '+wantText+'</span></div>'+
         '<button class="btn-secondary btn-sm" data-accept="'+o.id+'" '+(canAfford?'':'disabled')+'>Aceitar</button></div>';
     }).join('') : '<p class="note">Nenhuma oferta disponível no momento.</p>';
     wrap.querySelectorAll('[data-accept]').forEach(b=>b.addEventListener('click', ()=>acceptOfferById(b.getAttribute('data-accept'))));
@@ -1474,32 +1475,29 @@ async function createOffer(){
   }
   ensureArr(state.animals, offerId)[0] -= 1;
   const id = state.playerId+'-'+Date.now();
-  const record = {id, fromPlayerId:state.playerId, fromNick:state.nick, offerSpeciesId:offerId, wantType, wantCoins, wantSpeciesId, status:'open', createdAt:Date.now(), claimedByOfferer:false};
-  try{ await window.storage.set('trade:'+id, JSON.stringify(record), true); }catch(e){}
+  const record = {id, from_player_id:state.playerId, from_nick:state.nick, offer_species_id:offerId, want_type:wantType, want_coins:wantCoins, want_species_id:wantSpeciesId, status:'open', claimed_by_offerer:false};
+  try{ await sb.from('trade_offers').insert(record); }catch(e){}
   state.myOffers.push({id, offerSpeciesId:offerId, wantType, wantCoins, wantSpeciesId, status:'open'});
   addTradeLog('📤 Você publicou uma oferta de '+speciesById(offerId).name+'.');
   render(); saveState();
 }
 async function acceptOfferById(id){
   try{
-    const r = await window.storage.get('trade:'+id, true);
-    if(!r||!r.value){ alert('Essa oferta não existe mais.'); renderMarket(); return; }
-    const data = JSON.parse(r.value);
+    const { data, error } = await sb.from('trade_offers').select('*').eq('id', id).single();
+    if(error || !data){ alert('Essa oferta não existe mais.'); renderMarket(); return; }
     if(data.status!=='open'){ alert('Essa oferta já não está mais disponível.'); renderMarket(); return; }
-    if(data.wantType==='coins'){
-      if(state.coins<data.wantCoins){ alert('Moedas insuficientes.'); return; }
-      state.coins -= data.wantCoins;
+    if(data.want_type==='coins'){
+      if(state.coins<data.want_coins){ alert('Moedas insuficientes.'); return; }
+      state.coins -= data.want_coins;
     } else {
-      if(getStars(state.animals,data.wantSpeciesId)[0]<1){ alert('Você não tem esse animal na forma base.'); return; }
-      state.animals[data.wantSpeciesId][0] -= 1;
+      if(getStars(state.animals,data.want_species_id)[0]<1){ alert('Você não tem esse animal na forma base.'); return; }
+      state.animals[data.want_species_id][0] -= 1;
     }
-    grantSpecies(speciesById(data.offerSpeciesId), false);
-    data.status='completed'; data.toPlayerId=state.playerId; data.toNick=state.nick;
-    data.paymentType=data.wantType;
-    if(data.wantType==='coins') data.paymentCoins=data.wantCoins; else data.paymentSpeciesId=data.wantSpeciesId;
-    data.claimedByOfferer=false;
-    await window.storage.set('trade:'+id, JSON.stringify(data), true);
-    addTradeLog('🤝 Você trocou com '+data.fromNick+' e recebeu '+speciesById(data.offerSpeciesId).name+'!');
+    grantSpecies(speciesById(data.offer_species_id), false);
+    const update = {status:'completed', to_player_id:state.playerId, to_nick:state.nick, payment_type:data.want_type, claimed_by_offerer:false};
+    if(data.want_type==='coins') update.payment_coins=data.want_coins; else update.payment_species_id=data.want_species_id;
+    await sb.from('trade_offers').update(update).eq('id', id);
+    addTradeLog('🤝 Você trocou com '+data.from_nick+' e recebeu '+speciesById(data.offer_species_id).name+'!');
     render(); saveState();
     renderMarket();
   }catch(e){ alert('Não foi possível concluir a troca agora.'); }
@@ -1508,12 +1506,10 @@ async function cancelOffer(id){
   const off = state.myOffers.find(o=>o.id===id);
   if(!off || off.status!=='open') return;
   try{
-    const r = await window.storage.get('trade:'+id, true);
-    if(r && r.value){
-      const data = JSON.parse(r.value);
+    const { data } = await sb.from('trade_offers').select('*').eq('id', id).single();
+    if(data){
       if(data.status!=='open'){ alert('Essa oferta já foi aceita por outro jogador — verificando pagamento...'); await checkMyOffers(); return; }
-      data.status='cancelled';
-      await window.storage.set('trade:'+id, JSON.stringify(data), true);
+      await sb.from('trade_offers').update({status:'cancelled'}).eq('id', id);
     }
   }catch(e){}
   ensureArr(state.animals, off.offerSpeciesId)[0] += 1;
@@ -1527,16 +1523,14 @@ async function checkMyOffers(){
   let changed=false;
   for(const off of pending){
     try{
-      const r = await window.storage.get('trade:'+off.id, true);
-      if(!r||!r.value) continue;
-      const data = JSON.parse(r.value);
-      if(data.status==='completed' && !data.claimedByOfferer){
-        if(data.paymentType==='coins'){ state.coins += data.paymentCoins; }
-        else { grantSpecies(speciesById(data.paymentSpeciesId), false); }
-        data.claimedByOfferer=true;
-        await window.storage.set('trade:'+off.id, JSON.stringify(data), true);
+      const { data } = await sb.from('trade_offers').select('*').eq('id', off.id).single();
+      if(!data) continue;
+      if(data.status==='completed' && !data.claimed_by_offerer){
+        if(data.payment_type==='coins'){ state.coins += data.payment_coins; }
+        else { grantSpecies(speciesById(data.payment_species_id), false); }
+        await sb.from('trade_offers').update({claimed_by_offerer:true}).eq('id', off.id);
         off.status='claimed';
-        addTradeLog('📬 '+data.toNick+' aceitou sua troca! Você recebeu '+(data.paymentType==='coins'?'🪙 '+data.paymentCoins:speciesById(data.paymentSpeciesId).name)+'.');
+        addTradeLog('📬 '+data.to_nick+' aceitou sua troca! Você recebeu '+(data.payment_type==='coins'?'🪙 '+data.payment_coins:speciesById(data.payment_species_id).name)+'.');
         changed=true;
       }
     }catch(e){}
